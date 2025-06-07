@@ -8,6 +8,7 @@ import unicodedata
 from collections import deque
 import time
 import gzip
+import torch
 
 app = Flask(__name__)
 CORS(app)
@@ -27,6 +28,7 @@ def load_model():
             model_name = "vinai/phobert-base"
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=len(training_data.get("intents", [])))
+            model = torch.quantization.quantize_dynamic(model, {torch.nn.Linear}, dtype=torch.qint8)
             classifier = pipeline("text-classification", model=model, tokenizer=tokenizer, return_all_scores=True)
             model_loaded_at = current_time
             print("Model loaded successfully.")
@@ -35,19 +37,24 @@ def load_model():
             return None
     return classifier
 
-# Load and validate training data with compression
+# Load training data incrementally
 def load_training_data():
     global training_data
     try:
         json_file = "chatbot_training_data.json.gz" if os.path.exists("chatbot_training_data.json.gz") else "chatbot_training_data.json"
+        training_data = {"intents": [], "products": []}
         if json_file.endswith(".gz"):
             with gzip.open(json_file, "rt", encoding="utf-8") as f:
-                training_data = json.load(f)
+                data = json.load(f)
+                training_data["intents"] = data.get("intents", [])[:100]  # Limit intents
+                training_data["products"] = data.get("products", [])[:1000]  # Limit products
         else:
             with open(json_file, "r", encoding="utf-8") as f:
-                training_data = json.load(f)
+                data = json.load(f)
+                training_data["intents"] = data.get("intents", [])[:100]
+                training_data["products"] = data.get("products", [])[:1000]
         if not isinstance(training_data.get("intents"), list):
-            raise ValueError("JSON file must contain an 'intents' list")
+            raise ValueError("Intents must be a list")
         print("JSON file loaded successfully.")
     except Exception as e:
         print(f"Error loading JSON: {e}")
@@ -68,13 +75,12 @@ def detect_intent(user_input, context=None):
     context_text = " ".join(context) if context else ""
     combined_input = f"{context_text} {user_input_normalized}".strip()
     
-    # Rule-based product inquiry detection
     product_keywords = ["có", "tìm", "đâu", "có không"]
     clothing_keywords = ["áo", "váy", "quần", "yếm", "áo khoác"]
     if any(pk in combined_input for pk in product_keywords) and any(ck in combined_input for ck in clothing_keywords):
         intent = next((i for i in training_data.get("intents", []) if i["intent"] == "inquire_product"), None)
         if intent:
-            print(f"Matched intent: inquire_product (prioritized)")
+            print(f"Matched intent: inquire_product")
             price_max, color, category, pet_type, size, material, location = extract_query_info(user_input)
             response = random.choice(intent["responses"])
             response = response.replace("{clothing_type}", category or "quần áo")
@@ -83,12 +89,11 @@ def detect_intent(user_input, context=None):
             response = response.replace("{color}", color or "đẹp")
             return response
 
-    # PhoBERT-based intent classification
     global classifier
     if classifier is None:
         classifier = load_model()
         if classifier is None:
-            print("Model not loaded, falling back to rule-based detection")
+            print("Model not loaded, using rule-based detection")
             return None
     
     try:
@@ -97,8 +102,8 @@ def detect_intent(user_input, context=None):
         intent_idx = int(top_intent["label"].replace("LABEL_", ""))
         intent_name = intent_map.get(intent_idx)
         intent = next((i for i in training_data.get("intents", []) if i["intent"] == intent_name), None)
-        if intent and top_intent["score"] > 0.7:  # Confidence threshold
-            print(f"Matched intent: {intent['intent']} with score: {top_intent['score']}")
+        if intent and top_intent["score"] > 0.7:
+            print(f"Matched intent: {intent['intent']} (score: {top_intent['score']})")
             price_max, color, category, pet_type, size, material, location = extract_query_info(user_input)
             response = random.choice(intent["responses"])
             response = response.replace("{clothing_type}", category or "quần áo")
@@ -114,7 +119,6 @@ def detect_intent(user_input, context=None):
     except Exception as e:
         print(f"Error in intent classification: {e}")
     
-    # Fallback to rule-based detection
     for intent in training_data.get("intents", []):
         if intent["intent"] == "inquire_product":
             continue
@@ -123,7 +127,7 @@ def detect_intent(user_input, context=None):
             pattern_keywords = set(pattern_normalized.split())
             if any(keyword in combined_input for keyword in pattern_keywords) and \
                not (any(pk in combined_input for pk in product_keywords) and any(ck in combined_input for ck in clothing_keywords)):
-                print(f"Matched intent: {intent['intent']} with pattern: '{pattern}'")
+                print(f"Matched intent: {intent['intent']} (pattern: '{pattern}')")
                 price_max, color, category, pet_type, size, material, location = extract_query_info(user_input)
                 response = random.choice(intent["responses"])
                 response = response.replace("{clothing_type}", category or "quần áo")
@@ -143,7 +147,7 @@ def detect_intent(user_input, context=None):
 def recommend_products(price_max=None, color=None, category=None, pet_type=None, size=None, material=None):
     products = training_data.get("products", [])
     results = []
-    for product in products[:50]:  # Limit to 50 products to reduce memory
+    for product in products[:10]:  # Limit to 10 products
         match = True
         if price_max is not None and product["price"] > price_max:
             match = False
@@ -159,7 +163,7 @@ def recommend_products(price_max=None, color=None, category=None, pet_type=None,
             match = False
         if match:
             results.append(product)
-    return results[:5]  # Limit to 5 results for response
+    return results[:2]  # Limit to 2 results
 
 # ==================== INFO EXTRACTION ====================
 def extract_query_info(user_input):
@@ -236,29 +240,24 @@ def generate_response(user_input):
     user_input_normalized = unicodedata.normalize("NFKC", user_input.strip())
     user_input_lower = user_input_normalized.lower()
 
-    # Update context
     context_history.append(user_input_normalized)
     context = list(context_history)
 
-    # Handle vague or short inputs
     if len(user_input_normalized) <= 3 or user_input_lower in ["có", "ok", "ừ", "vâng"]:
         return "Dạ, bạn muốn tìm sản phẩm nào cho bé nhà mình nhỉ? Mình có áo, váy, quần cho chó và mèo, giá từ 150k-300k! 😊"[:1000]
 
-    # Intent detection
     intent_response = detect_intent(user_input_normalized, context)
     if intent_response:
-        return intent_response[:1000]  # Limit response length
+        return intent_response[:300]
 
-    # Fallback with keyword-based handling
     price_max, color, category, pet_type, size, material, location = extract_query_info(user_input_normalized)
 
-    # Handle product inquiry
     if any(key in user_input_lower for key in ["có", "tìm", "đâu", "có không"]) and \
        any(cat in user_input_lower for cat in ["áo", "váy", "quần", "yếm", "áo khoác"]):
         products = recommend_products(price_max, color, category, pet_type, size, material)
         if products:
-            product_list = ", ".join([f"{p['name']} (Giá: {p['price']} VNĐ, Màu: {p['color']})" for p in products[:5]])
-            return f"Dạ, shop có {product_list}. Bạn muốn mình gửi hình chi tiết hay chốt đơn luôn không? 😊"[:1000]
+            product_list = ", ".join([f"{p['name']} ({p['price']} VNĐ)" for p in products[:2]])
+            return f"Shop có {product_list}. Xem thêm không? 😊"[:300]
         else:
             return f"Xin lỗi bạn nha, hiện tại shop chưa có {category or 'sản phẩm'} {pet_type or ''} {color or ''} {size or ''}. Bạn thử tìm mẫu khác không? 😊"[:1000]
 
@@ -267,21 +266,21 @@ def generate_response(user_input):
         if intent:
             response = random.choice(intent["responses"])
             response = response.replace("{clothing_type}", category or "quần áo")
-            return response[:1000] or "Nên giặt tay với nước mát, tránh chất tẩy mạnh và phơi nơi thoáng mát nhé! 😊"[:1000]
+            return response[:300] or "Giặt tay nước mát, phơi thoáng! 😊"[:300]
 
     if any(keyword in user_input_lower for keyword in ["giao hàng", "bao lâu", "phí ship", "khi nào tới"]):
         intent = next((i for i in training_data.get("intents", []) if i["intent"] == "ask_delivery_time"), None)
         if intent:
             response = random.choice(intent["responses"])
             response = response.replace("{location}", location or "bạn")
-            return response[:1000] or f"Bạn ở {location or 'khu vực của bạn'} thì hàng sẽ tới trong 1-2 ngày, phí ship 30k, miễn phí cho đơn từ 500k nha! 😊 (Hôm nay là 07/06/2025, 11:47 PM)"[:1000]
+            return response[:300] or f"Giao {location or 'bạn'} 1-2 ngày, ship 30k, miễn phí đơn 500k! 😊 (08/06/2025, 12:58 AM)"[:300]
 
     products = recommend_products(price_max, color, category, pet_type, size, material)
     if products:
-        product_list = ", ".join([f"{p['name']} (Giá: {p['price']} VNĐ, Màu: {p['color']})" for p in products[:5]])
-        return f"Dạ, shop có {product_list}. Bạn muốn mình tư vấn thêm về mẫu nào không? 😊"[:1000]
+        product_list = ", ".join([f"{p['name']} ({p['price']} VNĐ)" for p in products[:2]])
+        return f"Shop có {product_list}. Tư vấn thêm? 😊"[:300]
     else:
-        return "Xin lỗi bạn nha, hiện tại shop chưa có sản phẩm phù hợp. Bạn thử tìm màu hoặc size khác xem, mình sẵn sàng tư vấn thêm! 😊"[:1000]
+        return "Chưa có sản phẩm phù hợp. Thử màu/size khác? 😊"[:300]
 
 # ==================== FLASK ROUTES ====================
 @app.route("/")
@@ -290,20 +289,19 @@ def serve_index():
         return render_template("index.html")
     except Exception as e:
         print(f"Error rendering index.html: {e}")
-        return "Lỗi khi tải trang, vui lòng thử lại sau! 😔", 500
+        return "Lỗi tải trang, thử lại sau! 😔", 500
 
 @app.route("/chat", methods=["POST"])
 def chat():
     user_input = request.json.get("message", "").strip()
     if not user_input:
-        return jsonify({"response": "Vui lòng nhập tin nhắn! 😊"}), 400
-    if len(user_input) > 1000:  # Limit input length
-        return jsonify({"response": "Tin nhắn quá dài, vui lòng ngắn gọn! 😊"}), 400
+        return jsonify({"response": "Nhập tin nhắn nhé! 😊"}), 400
+    if len(user_input) > 300:
+        return jsonify({"response": "Tin nhắn quá dài, ngắn gọn thôi! 😊"}), 400
     start_time = time.time()
     response = generate_response(user_input)
-    print(f"User input: '{user_input}', Response: '{response}', Processing time: {time.time() - start_time:.2f}s")
+    print(f"Input: '{user_input}', Response: '{response}', Time: {time.time() - start_time:.2f}s")
     return jsonify({"response": response})
 
-# WSGI application for production
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
