@@ -33,7 +33,7 @@ def load_model():
             return None
     return generator
 
-# Load and validate training data (move outside function to avoid reloading)
+# Load and validate training data
 try:
     with open("chatbot_training_data.json", "r", encoding="utf-8") as f:
         training_data = json.load(f)
@@ -44,7 +44,7 @@ except Exception as e:
     print(f"Error loading JSON: {e}")
     training_data = {"intents": [], "products": []}
 
-# Lưu trữ ngữ cảnh
+# Context history
 context_history = deque(maxlen=3)
 
 # ==================== INTENT DETECTION ====================
@@ -188,7 +188,7 @@ def generate_response(user_input):
     user_input_normalized = unicodedata.normalize("NFKC", user_input.strip())
     user_input_lower = user_input_normalized.lower()
 
-    # Cập nhật ngữ cảnh
+    # Update context
     context_history.append(user_input_normalized)
     context = list(context_history)
 
@@ -226,7 +226,7 @@ def generate_response(user_input):
         if intent:
             response = random.choice(intent["responses"])
             response = response.replace("{location}", location or "bạn")
-            return response or f"Bạn ở {location or 'khu vực của bạn'} thì hàng sẽ tới trong 1-2 ngày, phí ship 30k, miễn phí cho đơn từ 500k nha! 😊 (Hôm nay là 07/06/2025, 04:42 PM)"
+            return response or f"Bạn ở {location or 'khu vực của bạn'} thì hàng sẽ tới trong 1-2 ngày, phí ship 30k, miễn phí cho đơn từ 500k nha! 😊 (Hôm nay là 07/06/2025, 11:02 PM)"
 
     products = recommend_products(price_max, color, category, pet_type, size, material)
     if products:
@@ -254,5 +254,6 @@ def chat():
     print(f"User input: '{user_input}', Response: '{response}', Processing time: {time.time() - start_time:.2f}s")
     return jsonify({"response": response})
 
-# WSGI application for Gunicorn
-application = app
+# WSGI application for production
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
