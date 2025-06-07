@@ -20,7 +20,6 @@ model_loaded_at = 0
 def load_model():
     global model, tokenizer, generator, model_loaded_at
     current_time = time.time()
-    # Cache model for 1 hour to avoid reloading
     if model is None or (current_time - model_loaded_at > 3600):
         try:
             model_name = "vinai/bartpho-word"
@@ -227,7 +226,7 @@ def generate_response(user_input):
         if intent:
             response = random.choice(intent["responses"])
             response = response.replace("{location}", location or "bạn")
-            return response or f"Bạn ở {location or 'khu vực của bạn'} thì hàng sẽ tới trong 1-2 ngày, phí ship 30k, miễn phí cho đơn từ 500k nha! 😊 (Hôm nay là 07/06/2025, 04:20 PM)"
+            return response or f"Bạn ở {location or 'khu vực của bạn'} thì hàng sẽ tới trong 1-2 ngày, phí ship 30k, miễn phí cho đơn từ 500k nha! 😊 (Hôm nay là 07/06/2025, 04:42 PM)"
 
     products = recommend_products(price_max, color, category, pet_type, size, material)
     if products:
@@ -239,7 +238,11 @@ def generate_response(user_input):
 # ==================== FLASK ROUTES ====================
 @app.route("/")
 def serve_index():
-    return render_template("index.html")
+    try:
+        return render_template("index.html")
+    except Exception as e:
+        print(f"Error rendering index.html: {e}")
+        return "Lỗi khi tải trang, vui lòng thử lại sau! 😔", 500
 
 @app.route("/chat", methods=["POST"])
 def chat():
