@@ -33,7 +33,7 @@ def load_model():
             return None
     return generator
 
-# Load and validate training data
+# Load and validate training data (move outside function to avoid reloading)
 try:
     with open("chatbot_training_data.json", "r", encoding="utf-8") as f:
         training_data = json.load(f)
