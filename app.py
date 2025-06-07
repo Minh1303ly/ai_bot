@@ -22,7 +22,7 @@ def load_model():
     current_time = time.time()
     if model is None or (current_time - model_loaded_at > 3600):
         try:
-            model_name = "vinai/bartpho-word"
+            model_name = "rivaivn/vibert4chatbot"
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
             generator = pipeline("text2text-generation", model=model, tokenizer=tokenizer, max_new_tokens=50)
