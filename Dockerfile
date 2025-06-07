@@ -19,5 +19,5 @@ COPY . .
 # Expose the port (optional, for documentation)
 EXPOSE 8000
 
-# Run the application with Gunicorn, using $PORT environment variable
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-8000} app:application"]
+# Run the application with Gunicorn, with debug logging and timeout
+CMD ["sh", "-c", "echo 'Starting Gunicorn on PORT: ${PORT}' && gunicorn --bind 0.0.0.0:${PORT} --timeout 120 --log-level debug app:application || echo 'Gunicorn failed with exit code $?'"]
