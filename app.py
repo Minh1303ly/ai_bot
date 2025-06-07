@@ -254,6 +254,5 @@ def chat():
     print(f"User input: '{user_input}', Response: '{response}', Processing time: {time.time() - start_time:.2f}s")
     return jsonify({"response": response})
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    app.run(host="0.0.0.0", port=port)
+# WSGI application for Gunicorn
+application = app
